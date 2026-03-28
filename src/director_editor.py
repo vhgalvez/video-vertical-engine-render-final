@@ -1,16 +1,14 @@
 import json
-import os
+from pathlib import Path
 
 from src.asset_registry import list_assets_in_order, load_asset_indexes, resolve_asset_for_scene
 from src.audio_utils import get_audio_duration
+from src.job_paths import coerce_job_paths
 from src.schemas import Scene, Timeline
 
 
-def _load_manifest(manifest_path: str) -> dict:
-    if not os.path.isfile(manifest_path):
-        raise FileNotFoundError(f"Missing visual manifest: {manifest_path}")
-
-    with open(manifest_path, "r", encoding="utf-8") as handle:
+def _load_manifest(manifest_path: Path) -> dict:
+    with manifest_path.open("r", encoding="utf-8") as handle:
         manifest = json.load(handle)
 
     scene_plan = manifest.get("scene_plan")
@@ -20,8 +18,8 @@ def _load_manifest(manifest_path: str) -> dict:
     return manifest
 
 
-def _validate_audio(audio_path: str) -> None:
-    if not os.path.isfile(audio_path):
+def _validate_audio(audio_path: Path) -> None:
+    if not audio_path.is_file():
         raise FileNotFoundError(f"Missing narration audio: {audio_path}")
 
 
@@ -68,15 +66,16 @@ def _build_scene(scene_data: dict, position: int, asset_indexes: dict, ordered_a
     )
 
 
-def build_timeline(job_root: str) -> str:
-    manifest_path = os.path.join(job_root, "visual_manifest.json")
-    audio_path = os.path.join(job_root, "audio", "narration.wav")
-    output_path = os.path.join(job_root, "timeline", "timeline_final.json")
+def build_timeline(job_root) -> str:
+    job_paths = coerce_job_paths(job_root)
+    manifest_path = job_paths.require_manifest_path()
+    audio_path = job_paths.audio_path
+    output_path = job_paths.timeline_path
 
     manifest = _load_manifest(manifest_path)
     _validate_audio(audio_path)
 
-    asset_indexes = load_asset_indexes(job_root)
+    asset_indexes = load_asset_indexes(job_paths)
     ordered_assets = list_assets_in_order(asset_indexes)
     if not ordered_assets:
         raise ValueError("No visual assets found in 'images/' or 'videos/'.")
@@ -88,9 +87,9 @@ def build_timeline(job_root: str) -> str:
     ]
 
     timeline = Timeline(duration=duration, scenes=scenes)
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    job_paths.timeline_dir.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, "w", encoding="utf-8") as handle:
+    with output_path.open("w", encoding="utf-8") as handle:
         json.dump(timeline.to_dict(), handle, indent=2)
 
-    return output_path
+    return str(output_path)

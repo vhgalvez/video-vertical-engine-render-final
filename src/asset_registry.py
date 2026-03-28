@@ -1,6 +1,8 @@
 import logging
-import os
+from pathlib import Path
 from typing import Dict, List, Optional
+
+from src.job_paths import coerce_job_paths
 
 
 LOGGER = logging.getLogger(__name__)
@@ -9,21 +11,21 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".avi"}
 
 
-def _safe_listdir(path: str) -> List[str]:
-    if not os.path.isdir(path):
+def _safe_listdir(path: Path) -> List[Path]:
+    if not path.is_dir():
         return []
-    return sorted(os.listdir(path))
+    return sorted(path.iterdir(), key=lambda entry: entry.name)
 
 
-def _build_index(directory: str, valid_extensions: set, asset_kind: str) -> Dict[str, str]:
+def _build_index(directory: Path, valid_extensions: set, asset_kind: str) -> Dict[str, str]:
     index: Dict[str, str] = {}
 
     for entry in _safe_listdir(directory):
-        full_path = os.path.join(directory, entry)
-        if not os.path.isfile(full_path):
+        if not entry.is_file():
             continue
 
-        stem, extension = os.path.splitext(entry)
+        stem = entry.stem
+        extension = entry.suffix
         if extension.lower() not in valid_extensions:
             continue
 
@@ -33,14 +35,15 @@ def _build_index(directory: str, valid_extensions: set, asset_kind: str) -> Dict
                 "Use unique filenames per scene."
             )
 
-        index[stem] = full_path
+        index[stem] = str(entry.resolve())
 
     return index
 
 
-def load_asset_indexes(job_root: str) -> Dict[str, Dict[str, str]]:
-    images_dir = os.path.join(job_root, "images")
-    videos_dir = os.path.join(job_root, "videos")
+def load_asset_indexes(job_root) -> Dict[str, Dict[str, str]]:
+    job_paths = coerce_job_paths(job_root)
+    images_dir = job_paths.images_dir
+    videos_dir = job_paths.videos_dir
 
     images = _build_index(images_dir, IMAGE_EXTENSIONS, "image")
     videos = _build_index(videos_dir, VIDEO_EXTENSIONS, "video")
