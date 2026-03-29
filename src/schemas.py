@@ -13,6 +13,11 @@ class TimelineScene:
     start: float
     end: float
     duration: float
+    text: str | None = None
+    transition: str | None = None
+    mood: str | None = None
+    camera: str | None = None
+    visual_intent: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

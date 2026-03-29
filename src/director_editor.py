@@ -43,6 +43,57 @@ def _coerce_float(value: Any, label: str) -> float:
         raise ValueError(f"Invalid numeric value for {label}: {value!r}") from exc
 
 
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _validate_scene_plan(scene_plan: Any) -> tuple[list[dict[str, Any]], float]:
+    if not isinstance(scene_plan, list) or not scene_plan:
+        raise ValueError("visual_manifest.scene_plan must be a non-empty list.")
+
+    normalized_scenes: list[dict[str, Any]] = []
+    seen_scene_ids: set[str] = set()
+    previous_end = 0.0
+
+    for index, raw_scene in enumerate(scene_plan, start=1):
+        if not isinstance(raw_scene, dict):
+            raise ValueError(f"scene_plan entry #{index} must be an object.")
+
+        scene_id = str(raw_scene.get("scene_id", "")).strip()
+        if not scene_id:
+            raise ValueError(f"scene_plan entry #{index} is missing 'scene_id'.")
+        if scene_id in seen_scene_ids:
+            raise ValueError(f"scene_plan contains duplicate scene_id '{scene_id}'.")
+        seen_scene_ids.add(scene_id)
+
+        start = round(_coerce_float(raw_scene.get("start_sec"), f"{scene_id}.start_sec"), 3)
+        end = round(_coerce_float(raw_scene.get("end_sec"), f"{scene_id}.end_sec"), 3)
+        if start < 0:
+            raise ValueError(f"Scene '{scene_id}' has invalid start_sec={start}. Expected start_sec >= 0.")
+        if end <= start:
+            raise ValueError(f"Scene '{scene_id}' has invalid range start_sec={start}, end_sec={end}.")
+
+        if index == 1 and start != 0:
+            raise ValueError(
+                f"scene_plan must start at 0.0 seconds for the first scene. "
+                f"Received start_sec={start} for '{scene_id}'."
+            )
+
+        if abs(start - previous_end) > 0.05:
+            raise ValueError(
+                f"scene_plan is not contiguous before '{scene_id}'. "
+                f"Expected start_sec={previous_end:.3f}, received {start:.3f}."
+            )
+
+        previous_end = end
+        normalized_scenes.append(raw_scene)
+
+    return normalized_scenes, previous_end
+
+
 def _build_scene_from_plan(scene_data: dict[str, Any], asset_path_by_scene: dict[str, str]) -> TimelineScene:
     scene_id = str(scene_data.get("scene_id", "")).strip()
     if not scene_id:
@@ -68,6 +119,11 @@ def _build_scene_from_plan(scene_data: dict[str, Any], asset_path_by_scene: dict
         start=round(start, 3),
         end=round(end, 3),
         duration=duration,
+        text=_optional_str(scene_data.get("text")),
+        transition=_optional_str(scene_data.get("transition")),
+        mood=_optional_str(scene_data.get("mood")),
+        camera=_optional_str(scene_data.get("camera")),
+        visual_intent=_optional_str(scene_data.get("visual_intent")),
     )
 
 
@@ -96,6 +152,11 @@ def _build_fallback_scenes(job_paths: JobPaths, total_duration: float) -> list[T
                 start=round(start, 3),
                 end=round(end, 3),
                 duration=round(end - start, 3),
+                text=None,
+                transition=None,
+                mood=None,
+                camera=None,
+                visual_intent=None,
             )
         )
 
@@ -116,14 +177,22 @@ def build_timeline(job_root: JobPaths | str | Path, render_format: str = "vertic
     LOGGER.info("Job procesado: %s", job_paths.job_id)
     LOGGER.info("visual_manifest cargado: %s", manifest_path)
 
-    total_duration = round(get_audio_duration(audio_path), 3)
-    LOGGER.info("Duracion del audio: %.3f segundos", total_duration)
+    audio_duration = round(get_audio_duration(audio_path), 3)
+    LOGGER.info("Duracion del audio: %.3f segundos", audio_duration)
 
     scene_plan = manifest_data.get("scene_plan")
     registry = load_asset_registry(job_paths)
 
     if scene_plan:
-        LOGGER.info("scene_plan detectado: %s escenas", len(scene_plan))
+        scene_plan, timeline_total_duration = _validate_scene_plan(scene_plan)
+        LOGGER.info("scene_plan cargado: %s escenas", len(scene_plan))
+        if abs(timeline_total_duration - audio_duration) > 0.25:
+            LOGGER.warning(
+                "Desajuste entre scene_plan y audio. Se preserva scene_plan como fuente de verdad. "
+                "timeline_end=%.3f audio_duration=%.3f",
+                timeline_total_duration,
+                audio_duration,
+            )
         resolved_assets = validate_scene_assets(
             scene_ids=[str(scene.get("scene_id", "")).strip() for scene in scene_plan],
             registry=registry,
@@ -135,7 +204,7 @@ def build_timeline(job_root: JobPaths | str | Path, render_format: str = "vertic
 
         for asset in resolved_assets:
             LOGGER.info(
-                "Asset encontrado para %s: %s (%s)",
+                "Asset encontrado por scene_id %s: %s (%s)",
                 asset.scene_id,
                 job_paths.relative_to_job(asset.path),
                 asset.type,
@@ -143,8 +212,12 @@ def build_timeline(job_root: JobPaths | str | Path, render_format: str = "vertic
 
         scenes = [_build_scene_from_plan(scene_data, asset_path_by_scene) for scene_data in scene_plan]
     else:
-        LOGGER.info("scene_plan no detectado. Usando fallback por assets + duracion de audio.")
-        scenes = _build_fallback_scenes(job_paths, total_duration)
+        LOGGER.warning(
+            "scene_plan no detectado. Se activa fallback tecnico por assets + duracion de audio. "
+            "Este modo no preserva direccion editorial upstream."
+        )
+        timeline_total_duration = audio_duration
+        scenes = _build_fallback_scenes(job_paths, audio_duration)
         for scene in scenes:
             LOGGER.info("Asset fallback para %s: %s (%s)", scene.id, scene.path, scene.type)
 
@@ -155,7 +228,7 @@ def build_timeline(job_root: JobPaths | str | Path, render_format: str = "vertic
         fps=VERTICAL_FPS,
         audio_path=job_paths.relative_to_job(audio_path),
         subtitle_path=job_paths.relative_to_job(subtitle_path),
-        total_duration=total_duration,
+        total_duration=round(timeline_total_duration, 3),
         scenes=scenes,
     )
 

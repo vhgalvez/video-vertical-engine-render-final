@@ -4,6 +4,7 @@ import argparse
 import logging
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -28,16 +29,33 @@ def configure_logging() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 
 
+@contextmanager
+def job_log_handler(job_paths, render_format: str):
+    job_paths.logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = job_paths.logs_dir / f"render_{render_format}.log"
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+    try:
+        LOGGER.info("Log del job: %s", log_path)
+        yield log_path
+    finally:
+        root_logger.removeHandler(handler)
+        handler.close()
+
+
 def iter_job_ids(jobs_root: Path) -> list[str]:
     return sorted(entry.name for entry in jobs_root.iterdir() if entry.is_dir())
 
 
 def run_single_job(jobs_root: str | None, job_id: str, render_format: str) -> str:
     job_paths = resolve_job_paths(jobs_root=jobs_root, job_id=job_id)
-    LOGGER.info("Procesando job %s en %s", job_id, job_paths.job_root)
-    final_output = render(job_paths, render_format=render_format)
-    LOGGER.info("Job %s completado. Video final: %s", job_id, final_output)
-    return final_output
+    with job_log_handler(job_paths, render_format):
+        LOGGER.info("Procesando job %s en %s", job_id, job_paths.job_root)
+        final_output = render(job_paths, render_format=render_format)
+        LOGGER.info("Job %s completado. Video final: %s", job_id, final_output)
+        return final_output
 
 
 def parse_args() -> argparse.Namespace:

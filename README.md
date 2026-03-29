@@ -1,8 +1,33 @@
 # Video Vertical Final Render Engine
 
-Motor de render final automático para videos verticales a partir de un dataset externo real de jobs. El flujo toma un job ya preparado con narración, subtítulos y `visual_manifest`, detecta assets manuales en `images/` y `videos/`, construye `timeline_final.json` priorizando `scene_plan`, renderiza la base visual, añade audio y quema subtítulos.
+Motor de render final vertical automático que ejecuta fielmente el plan editorial ya definido aguas arriba en `source/<job_id>_visual_manifest.json`.
 
-## Dataset esperado
+Este repositorio no usa LLMs ni toma decisiones semánticas. El upstream ya piensa. Aquí solo se ejecuta:
+
+`visual_manifest.scene_plan -> matching manual por scene_id -> timeline_final.json -> video_base.mp4 -> video_with_audio.mp4 -> video_final.mp4`
+
+## Qué haces tú manualmente
+
+Solo dos cosas por job:
+
+1. Poner imágenes en `jobs/<job_id>/images/`
+2. Poner videos en `jobs/<job_id>/videos/`
+
+Todo lo demás lo hace el repo:
+
+- lee audio
+- lee subtítulos
+- lee `visual_manifest`
+- usa `scene_plan` como fuente de verdad
+- empata assets por `scene_id`
+- construye `timeline_final.json`
+- renderiza `video_base.mp4`
+- añade narración
+- quema subtítulos
+- exporta `video_final.mp4`
+- actualiza `status.json`
+
+## Dataset real esperado
 
 Raíz del dataset:
 
@@ -16,76 +41,112 @@ Jobs:
 /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs
 ```
 
-Estructura real por job:
+Estructura por job:
 
 ```text
 jobs/<job_id>/
-  audio/
-    <job_id>_narration.wav
-  subtitles/
-    <job_id>_narration.srt
-  source/
-    <job_id>_brief.json
-    <job_id>_script.json
-    <job_id>_visual_manifest.json
-  images/
-    scene_01.png
-    scene_03.jpg
-    ...
-  videos/
-    scene_02.mp4
-    scene_05.mov
-    ...
-  timeline/
-    vertical/
-      timeline_final.json
-  output/
-    vertical/
-      video_base.mp4
-      video_with_audio.mp4
-      video_final.mp4
-  logs/
-  job.json
-  status.json
+├── audio/
+│   └── <job_id>_narration.wav
+├── subtitles/
+│   └── <job_id>_narration.srt
+├── source/
+│   ├── <job_id>_brief.json
+│   ├── <job_id>_script.json
+│   └── <job_id>_visual_manifest.json
+├── images/
+│   ├── scene_01.png
+│   ├── scene_03.jpg
+│   └── ...
+├── videos/
+│   ├── scene_02.mp4
+│   ├── scene_04.mov
+│   └── ...
+├── timeline/
+│   └── vertical/
+│       └── timeline_final.json
+├── output/
+│   └── vertical/
+│       ├── video_base.mp4
+│       ├── video_with_audio.mp4
+│       └── video_final.mp4
+├── logs/
+│   └── render_vertical.log
+├── job.json
+└── status.json
 ```
 
-## Regla de naming de assets
+## Regla editorial fundamental
 
-El motor usa el `scene_plan` de `source/<job_id>_visual_manifest.json` como fuente prioritaria. Cada escena debe resolverse por su `scene_id` real.
+Cuando existe `visual_manifest.scene_plan`, el renderer:
 
-Ejemplos válidos:
+- usa exactamente el orden del `scene_plan`
+- usa exactamente `start_sec` y `end_sec`
+- calcula `duration = end_sec - start_sec`
+- hace matching estricto por `scene_id`
+- preserva metadata editorial útil dentro del timeline
 
-- `scene_01.png`
-- `scene_01.jpg`
-- `scene_01.jpeg`
-- `scene_01.webp`
-- `scene_01.mp4`
-- `scene_01.mov`
-- `scene_01.mkv`
-- `scene_01.webm`
+No monta escenas por orden arbitrario de archivos.
 
-Prioridad de matching:
+## Naming correcto de assets
 
-1. Si existe video para `scene_id`, se usa el video.
-2. Si no existe video pero sí imagen, se usa la imagen.
-3. Si no existe ninguno, el proceso falla con error claro indicando el `scene_id` faltante.
+Cada escena del `scene_plan` debe existir en `images/` o `videos/` con el mismo `scene_id`.
 
-No se usa naming por defecto tipo `scene_001` ni fallback posicional cuando existe `scene_plan`.
+Para `scene_01`, el motor busca en este orden lógico:
 
-## Qué hace el pipeline
+- `videos/scene_01.mp4`
+- `videos/scene_01.mov`
+- `videos/scene_01.mkv`
+- `videos/scene_01.webm`
+- `images/scene_01.png`
+- `images/scene_01.jpg`
+- `images/scene_01.jpeg`
+- `images/scene_01.webp`
 
-1. Lee `job.json`, `status.json` y `source/<job_id>_visual_manifest.json`.
-2. Detecta assets manuales en `images/` y `videos/`.
-3. Construye `timeline/vertical/timeline_final.json`.
-4. Renderiza `output/vertical/video_base.mp4`.
-5. Añade narración y genera `output/vertical/video_with_audio.mp4`.
-6. Quema subtítulos y genera `output/vertical/video_final.mp4`.
-7. Actualiza `status.json` con:
-   `timeline_generated`, `render_started`, `render_finished`, `final_video_path`, `render_vertical_ready`.
+Prioridad:
 
-## Timeline generado
+1. Si existe video, usa video.
+2. Si no existe video pero sí imagen, usa imagen.
+3. Si no existe ninguno, falla con error claro indicando el `scene_id` faltante.
 
-El timeline final tiene este formato:
+Debe haber un solo asset por `scene_id` y tipo. Dos ficheros como `scene_01.mp4` y `scene_01.mov` para la misma escena producirán error.
+
+## Fuente de verdad del timeline
+
+El archivo clave es:
+
+```text
+source/<job_id>_visual_manifest.json
+```
+
+Se usa especialmente:
+
+- `scene_plan`
+- `scene_id`
+- `scene_role`
+- `start_sec`
+- `end_sec`
+- `text`
+- `visual_intent`
+- `camera`
+- `mood`
+- `transition`
+
+El `timeline_final.json` generado preserva:
+
+- `id`
+- `scene_role`
+- `type`
+- `path`
+- `start`
+- `end`
+- `duration`
+- `text`
+- `transition`
+- `mood`
+- `camera`
+- `visual_intent`
+
+Ejemplo:
 
 ```json
 {
@@ -104,27 +165,46 @@ El timeline final tiene este formato:
       "path": "images/scene_01.png",
       "start": 0.0,
       "end": 7.01,
-      "duration": 7.01
+      "duration": 7.01,
+      "text": "Estás en un bucle.",
+      "transition": "cold_open",
+      "mood": "urgencia and immediate urgency",
+      "camera": "extreme close-up or punch-in opening frame, direct subject emphasis",
+      "visual_intent": "Open with an arresting visual contradiction that stops the scroll and frames the core thesis immediately."
     }
   ]
 }
 ```
 
-Si `scene_plan` no existe, el motor hace fallback: detecta assets disponibles y reparte el audio total en segmentos equitativos.
+## Flujo real del pipeline
+
+1. Lee `job.json`, `status.json`, audio, subtítulos y `visual_manifest`.
+2. Carga `scene_plan`.
+3. Valida que el plan sea contiguo.
+4. Si el audio no coincide exactamente, conserva el `scene_plan` como fuente de verdad y paddea silencio si el audio queda corto.
+5. Busca el asset correcto por `scene_id`.
+6. Genera `timeline/vertical/timeline_final.json`.
+7. Renderiza `output/vertical/video_base.mp4`.
+8. Añade narración en `output/vertical/video_with_audio.mp4`.
+9. Quema subtítulos en `output/vertical/video_final.mp4`.
+10. Actualiza `status.json`.
+11. Escribe logs claros en consola y en `logs/render_vertical.log`.
 
 ## Requisitos
 
 - Python 3.11 o superior
-- `ffmpeg` y `ffprobe` instalados y accesibles en `PATH`
-- Dataset externo disponible en Windows o WSL
+- `ffmpeg` y `ffprobe` accesibles en `PATH`
+- Dataset externo disponible
 
-## Instalación
+Instalación:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Ejecutar un job
+## CLI
+
+Un solo job:
 
 ```bash
 python scripts/run_job.py \
@@ -142,7 +222,7 @@ python scripts/run_job.py `
   --format vertical
 ```
 
-## Ejecutar todos los jobs
+Todos los jobs:
 
 ```bash
 python scripts/run_job.py \
@@ -150,18 +230,6 @@ python scripts/run_job.py \
   --all \
   --format vertical
 ```
-
-## Logging esperado
-
-El comando imprime:
-
-- job procesado
-- `visual_manifest` cargado
-- `scene_plan` detectado
-- assets encontrados por `scene_id`
-- timeline generado
-- duración del audio
-- ruta final del mp4
 
 ## Salidas generadas
 
@@ -172,9 +240,51 @@ Por cada job:
 - `output/vertical/video_with_audio.mp4`
 - `output/vertical/video_final.mp4`
 
-## Flujo recomendado
+`status.json` se actualiza con campos como:
 
-1. Genera o recibe un job ya completo con audio, subtítulos y `visual_manifest`.
-2. Copia manualmente tus assets visuales a `images/` y `videos/` usando el `scene_id` exacto del `scene_plan`.
-3. Ejecuta `scripts/run_job.py`.
+- `timeline_generated`
+- `timeline_path`
+- `render_started`
+- `render_started_at`
+- `render_finished`
+- `render_finished_at`
+- `final_video_path`
+- `render_vertical_ready`
+- `render_error`
+
+## Logs esperados
+
+El proceso deja trazabilidad como:
+
+- job procesado
+- `visual_manifest` cargado
+- `scene_plan` cargado
+- assets encontrados por `scene_id`
+- escenas faltantes
+- timeline generado
+- archivo final generado
+
+## Errores típicos
+
+`Missing visual assets for scene_plan scenes`
+Falta al menos un `scene_id` del `scene_plan` en `images/` o `videos/`.
+
+`Duplicate image asset` o `Duplicate video asset`
+Hay más de un fichero del mismo tipo para el mismo `scene_id`.
+
+`scene_plan is not contiguous`
+Los `start_sec` y `end_sec` no encadenan correctamente escena a escena.
+
+`Desajuste entre scene_plan y audio`
+No detiene el render por sí solo. El motor conserva el `scene_plan` y paddea silencio si el audio termina antes.
+
+`Missing narration audio` o `Missing subtitle file`
+Faltan artefactos upstream del job.
+
+## Ejecución recomendada
+
+1. Abre el `visual_manifest` del job y mira los `scene_id` del `scene_plan`.
+2. Coloca tus assets manuales con esos mismos nombres en `images/` y `videos/`.
+3. Ejecuta la CLI.
 4. Revisa `output/vertical/video_final.mp4`.
+5. Si falla, abre `logs/render_vertical.log`.

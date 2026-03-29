@@ -50,32 +50,40 @@ def render(job_root: JobPaths | str | Path, render_format: str = "vertical") -> 
     job_paths = coerce_job_paths(job_root)
     render_format = ensure_supported_format(render_format)
 
-    build_result = build_timeline(job_paths, render_format=render_format)
     update_status(
         job_paths,
-        timeline_generated=True,
         render_started=True,
         render_finished=False,
         render_vertical_ready=False,
+        render_error=False,
+        render_started_at=_utc_now_iso(),
         last_step="render_vertical_started",
     )
 
-    timeline_data = _load_timeline_data(build_result)
     output_base = job_paths.output_base_path(render_format)
     output_with_audio = job_paths.output_with_audio_path(render_format)
     final_output = job_paths.final_output_path(render_format)
     output_base.parent.mkdir(parents=True, exist_ok=True)
 
-    fps = int(timeline_data["fps"])
-    width = int(timeline_data["width"])
-    height = int(timeline_data["height"])
-    audio_path = job_paths.job_root / timeline_data["audio_path"]
-    subtitle_path = job_paths.job_root / timeline_data["subtitle_path"]
-
     clips = []
     composed_video = None
 
     try:
+        build_result = build_timeline(job_paths, render_format=render_format)
+        update_status(
+            job_paths,
+            timeline_generated=True,
+            timeline_path=job_paths.relative_to_job(build_result.timeline_path),
+            last_step="timeline_generated",
+        )
+
+        timeline_data = _load_timeline_data(build_result)
+        fps = int(timeline_data["fps"])
+        width = int(timeline_data["width"])
+        height = int(timeline_data["height"])
+        audio_path = job_paths.job_root / timeline_data["audio_path"]
+        subtitle_path = job_paths.job_root / timeline_data["subtitle_path"]
+
         for scene in timeline_data.get("scenes", []):
             scene_id = scene["id"]
             duration = float(scene["duration"])
@@ -92,6 +100,14 @@ def render(job_root: JobPaths | str | Path, render_format: str = "vertical") -> 
                 fps=fps,
             )
             clips.append(clip)
+            LOGGER.info(
+                "Escena renderizable %s: start=%.3f end=%.3f duration=%.3f asset=%s",
+                scene_id,
+                float(scene["start"]),
+                float(scene["end"]),
+                duration,
+                scene["path"],
+            )
 
         if not clips:
             raise ValueError("Timeline does not contain any renderable scenes.")
@@ -114,6 +130,7 @@ def render(job_root: JobPaths | str | Path, render_format: str = "vertical") -> 
             render_started=False,
             render_finished=False,
             render_vertical_ready=False,
+            render_error=True,
             last_step="render_vertical_failed",
         )
         raise
@@ -130,8 +147,10 @@ def render(job_root: JobPaths | str | Path, render_format: str = "vertical") -> 
         render_finished=True,
         final_video_path=final_relative_path,
         render_vertical_ready=True,
+        render_error=False,
+        render_finished_at=_utc_now_iso(),
         last_step="render_vertical_finished",
     )
 
-    LOGGER.info("Ruta final del mp4: %s", final_output)
+    LOGGER.info("Archivo final generado: %s", final_output)
     return str(final_output)

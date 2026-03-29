@@ -90,4 +90,24 @@ def resolve_asset_for_scene(scene_id: str, registry: dict[str, dict[str, Path]])
 
 
 def validate_scene_assets(scene_ids: Iterable[str], registry: dict[str, dict[str, Path]]) -> list[ResolvedAsset]:
-    return [resolve_asset_for_scene(scene_id=scene_id, registry=registry) for scene_id in scene_ids]
+    resolved_assets: list[ResolvedAsset] = []
+    missing_scene_ids: list[str] = []
+
+    for scene_id in scene_ids:
+        try:
+            resolved_assets.append(resolve_asset_for_scene(scene_id=scene_id, registry=registry))
+        except FileNotFoundError:
+            missing_scene_ids.append(scene_id)
+
+    if missing_scene_ids:
+        missing_details = "; ".join(
+            f"{scene_id}: "
+            + ", ".join(f"{scene_id}{extension}" for extension in VIDEO_EXTENSIONS + IMAGE_EXTENSIONS)
+            for scene_id in missing_scene_ids
+        )
+        raise FileNotFoundError(
+            "Missing visual assets for scene_plan scenes. "
+            f"Expected one file per scene_id with video priority over image. Missing: {missing_details}"
+        )
+
+    return resolved_assets
