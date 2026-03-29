@@ -9,10 +9,7 @@ from typing import Optional, Union
 
 DEFAULT_DATASET_ROOT = "/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset"
 DEFAULT_JOBS_DIRNAME = "jobs"
-DEFAULT_MANIFEST_RELATIVE_PATHS = (
-    Path("visual_manifest.json"),
-    Path("source") / "visual_manifest.json",
-)
+SUPPORTED_FORMATS = {"vertical"}
 
 PathLikeInput = Union[str, os.PathLike[str]]
 
@@ -57,7 +54,7 @@ def normalize_path(raw_path: PathLikeInput) -> Path:
 
         path = Path(candidate)
         normalized_key = os.path.normcase(os.path.normpath(str(path)))
-        if any(existing[0] == normalized_key for existing in candidates):
+        if any(existing_key == normalized_key for existing_key, _ in candidates):
             continue
         candidates.append((normalized_key, path))
 
@@ -85,6 +82,14 @@ def _resolve_optional_dir(raw_path: Optional[PathLikeInput]) -> Optional[Path]:
     return None
 
 
+def ensure_supported_format(render_format: str) -> str:
+    normalized = render_format.strip().lower()
+    if normalized not in SUPPORTED_FORMATS:
+        allowed = ", ".join(sorted(SUPPORTED_FORMATS))
+        raise ValueError(f"Unsupported render format '{render_format}'. Supported formats: {allowed}.")
+    return normalized
+
+
 @dataclass(frozen=True)
 class JobPaths:
     dataset_root: Path
@@ -92,23 +97,58 @@ class JobPaths:
     job_root: Path
 
     @property
+    def job_id(self) -> str:
+        return self.job_root.name
+
+    @property
+    def source_dir(self) -> Path:
+        return self.job_root / "source"
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.job_root / "logs"
+
+    @property
+    def status_path(self) -> Path:
+        return self.job_root / "status.json"
+
+    @property
+    def job_file_path(self) -> Path:
+        return self.job_root / "job.json"
+
+    @property
     def manifest_candidates(self) -> tuple[Path, ...]:
-        return tuple(self.job_root / relative_path for relative_path in DEFAULT_MANIFEST_RELATIVE_PATHS)
+        return (
+            self.source_dir / f"{self.job_id}_visual_manifest.json",
+            self.source_dir / "visual_manifest.json",
+            self.job_root / "visual_manifest.json",
+        )
+
+    @property
+    def audio_candidates(self) -> tuple[Path, ...]:
+        return (
+            self.job_root / "audio" / f"{self.job_id}_narration.wav",
+            self.job_root / "audio" / "narration.wav",
+        )
+
+    @property
+    def subtitles_candidates(self) -> tuple[Path, ...]:
+        return (
+            self.job_root / "subtitles" / f"{self.job_id}_narration.srt",
+            self.job_root / "subtitles" / "narration.srt",
+        )
 
     @property
     def manifest_path(self) -> Path:
-        for candidate in self.manifest_candidates:
-            if candidate.is_file():
-                return candidate
-        return self.manifest_candidates[0]
+        return self._first_existing(self.manifest_candidates)
 
     @property
     def audio_path(self) -> Path:
-        return self.job_root / "audio" / "narration.wav"
+        return self._first_existing(self.audio_candidates)
 
     @property
     def subtitles_path(self) -> Path:
-        return self.job_root / "subtitles" / "narration.srt"
+        return self._first_existing(self.subtitles_candidates)
 
     @property
     def images_dir(self) -> Path:
@@ -118,42 +158,68 @@ class JobPaths:
     def videos_dir(self) -> Path:
         return self.job_root / "videos"
 
-    @property
-    def timeline_dir(self) -> Path:
-        return self.job_root / "timeline"
+    def timeline_dir(self, render_format: str = "vertical") -> Path:
+        return self.job_root / "timeline" / ensure_supported_format(render_format)
 
-    @property
-    def timeline_path(self) -> Path:
-        return self.timeline_dir / "timeline_final.json"
+    def timeline_path(self, render_format: str = "vertical") -> Path:
+        return self.timeline_dir(render_format) / "timeline_final.json"
 
-    @property
-    def output_dir(self) -> Path:
-        return self.job_root / "output"
+    def output_dir(self, render_format: str = "vertical") -> Path:
+        return self.job_root / "output" / ensure_supported_format(render_format)
 
-    @property
-    def output_base_path(self) -> Path:
-        return self.output_dir / "video_base.mp4"
+    def output_base_path(self, render_format: str = "vertical") -> Path:
+        return self.output_dir(render_format) / "video_base.mp4"
 
-    @property
-    def output_with_audio_path(self) -> Path:
-        return self.output_dir / "video_with_audio.mp4"
+    def output_with_audio_path(self, render_format: str = "vertical") -> Path:
+        return self.output_dir(render_format) / "video_with_audio.mp4"
 
-    @property
-    def final_output_path(self) -> Path:
-        return self.output_dir / "video_final.mp4"
+    def final_output_path(self, render_format: str = "vertical") -> Path:
+        return self.output_dir(render_format) / "video_final.mp4"
+
+    def relative_to_job(self, path: Path) -> str:
+        return path.resolve().relative_to(self.job_root.resolve()).as_posix()
 
     def require_file(self, path: Path, label: str) -> Path:
         if not path.is_file():
             raise FileNotFoundError(f"Missing {label}: {path}")
-        return path
+        return path.resolve()
+
+    def require_job_file_path(self) -> Path:
+        return self.require_file(self.job_file_path, "job.json")
+
+    def require_status_path(self) -> Path:
+        return self.require_file(self.status_path, "status.json")
 
     def require_manifest_path(self) -> Path:
         for candidate in self.manifest_candidates:
             if candidate.is_file():
-                return candidate
+                return candidate.resolve()
 
         candidates = ", ".join(str(path) for path in self.manifest_candidates)
         raise FileNotFoundError(f"Missing visual manifest. Checked: {candidates}")
+
+    def require_audio_path(self) -> Path:
+        for candidate in self.audio_candidates:
+            if candidate.is_file():
+                return candidate.resolve()
+
+        candidates = ", ".join(str(path) for path in self.audio_candidates)
+        raise FileNotFoundError(f"Missing narration audio. Checked: {candidates}")
+
+    def require_subtitles_path(self) -> Path:
+        for candidate in self.subtitles_candidates:
+            if candidate.is_file():
+                return candidate.resolve()
+
+        candidates = ", ".join(str(path) for path in self.subtitles_candidates)
+        raise FileNotFoundError(f"Missing subtitle file. Checked: {candidates}")
+
+    @staticmethod
+    def _first_existing(candidates: tuple[Path, ...]) -> Path:
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate.resolve()
+        return candidates[0]
 
 
 def resolve_job_paths(

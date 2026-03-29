@@ -1,27 +1,42 @@
+from __future__ import annotations
+
 from dataclasses import asdict, dataclass
-from typing import List, Optional
+from typing import Any
 
 
-@dataclass
-class Scene:
-    scene_id: str
+@dataclass(frozen=True)
+class TimelineScene:
+    id: str
+    scene_role: str
+    type: str
+    path: str
     start: float
     end: float
-    asset_type: str
-    asset_path: str
-    fallback_image: Optional[str] = None
+    duration: float
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Timeline:
-    duration: float
-    scenes: List[Scene]
+    format: str
+    width: int
+    height: int
+    fps: int
+    audio_path: str
+    subtitle_path: str
+    total_duration: float
+    scenes: list[TimelineScene]
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
-            "duration": self.duration,
+            "format": self.format,
+            "width": self.width,
+            "height": self.height,
+            "fps": self.fps,
+            "audio_path": self.audio_path,
+            "subtitle_path": self.subtitle_path,
+            "total_duration": self.total_duration,
             "scenes": [scene.to_dict() for scene in self.scenes],
         }
